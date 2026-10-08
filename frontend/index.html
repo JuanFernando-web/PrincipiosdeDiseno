@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catálogo de productos · Demo de caché</title>
+<style>
+  :root {
+    --bg: #f5f6fa; --card: #fff; --ink: #1f2430; --muted: #6b7280; --line: #e5e7eb;
+    --primary: #3b5bdb; --hit: #2f9e44; --hit-bg: #ebfbee; --miss: #e8590c; --miss-bg: #fff4e6;
+    --err: #c92a2a; --err-bg: #fff5f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14161c; --card: #1d2029; --ink: #e8eaf0; --muted: #9aa1b2; --line: #2d313d;
+            --primary: #748ffc; --hit: #69db7c; --hit-bg: #1b2e20; --miss: #ffa94d; --miss-bg: #35261a;
+            --err: #ff8787; --err-bg: #3a1f1f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
+  header { padding: 20px 24px; background: var(--card); border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 20px; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  main { max-width: 1050px; margin: 0 auto; padding: 20px; display: grid; gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .card h2 { margin: 0 0 12px; font-size: 15px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card);
+           color: var(--ink); cursor: pointer; }
+  button:hover { border-color: var(--primary); }
+  button.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+  button.danger { color: var(--err); }
+  button:disabled { opacity: .5; cursor: wait; }
+  input, select { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+  input#apiBase { width: 260px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .badge { display: inline-block; padding: 1px 9px; border-radius: 99px; font-size: 12px; font-weight: 700; }
+  .badge.HIT { background: var(--hit-bg); color: var(--hit); }
+  .badge.MISS { background: var(--miss-bg); color: var(--miss); }
+  .badge.NA { background: var(--line); color: var(--muted); }
+  .badge.ERR { background: var(--err-bg); color: var(--err); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
+  .stat { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+  .stat:last-child { border: 0; }
+  .big { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .big small { font-size: 13px; font-weight: 400; color: var(--muted); }
+  .bar { height: 10px; border-radius: 5px; min-width: 2px; }
+  .bar.HIT { background: var(--hit); } .bar.MISS { background: var(--miss); } .bar.NA { background: var(--muted); } .bar.ERR { background: var(--err); }
+  .barcell { width: 32%; }
+  .alert { padding: 12px 14px; border-radius: 8px; background: var(--err-bg); color: var(--err); font-size: 14px; display: none; }
+  .alert.show { display: block; }
+  .muted { color: var(--muted); font-size: 13px; }
+  code { background: var(--line); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Catálogo de productos</h1>
+  <p>Demo del patrón Proxy + caché · cada consulta muestra su tiempo de respuesta y si vino de la caché (HIT) o del repositorio (MISS)</p>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Consultas</h2>
+    <div class="row">
+      <label class="muted" for="apiBase">API:</label>
+      <input id="apiBase" value="http://localhost:8080">
+      <button class="primary" id="btnListar">Listar todos</button>
+      <select id="selId" aria-label="Id de producto">
+        <option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option value="999">999 (no existe)</option>
+      </select>
+      <button id="btnBuscar">Buscar por id</button>
+      <button class="danger" id="btnLimpiar">Vaciar caché</button>
+      <button id="btnDemo" title="Vacía la caché y repite las mismas consultas">▶ Demo automática</button>
+    </div>
+    <p class="muted" style="margin:10px 0 0">Pulsa la misma consulta dos veces: la primera paga ~1500 ms (latencia simulada del repositorio), la segunda debería responder en pocos milisegundos.</p>
+  </section>
+
+  <div class="alert" id="alerta"></div>
+
+  <section class="grid2">
+    <div class="card">
+      <h2>Última respuesta</h2>
+      <div class="big" id="ultimoMs">—<small> ms</small></div>
+      <div class="stat"><span class="muted">Estado de caché</span><span id="ultimoCache">—</span></div>
+      <div class="stat"><span class="muted">Tiempo en el servidor (<code>X-Response-Time-Ms</code>)</span><span id="ultimoServ">—</span></div>
+      <div class="stat"><span class="muted">Tiempo total medido por el navegador</span><span id="ultimoCli">—</span></div>
+    </div>
+    <div class="card">
+      <h2>Comparación</h2>
+      <div class="stat"><span class="muted">Promedio MISS (sin caché)</span><span id="avgMiss">—</span></div>
+      <div class="stat"><span class="muted">Promedio HIT (con caché)</span><span id="avgHit">—</span></div>
+      <div class="stat"><span class="muted">Mejora</span><span class="big" id="speedup">—</span></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Resultado</h2>
+    <table>
+      <thead><tr><th>Id</th><th>Nombre</th><th>Categoría</th><th class="num">Precio</th></tr></thead>
+      <tbody id="productos"><tr><td colspan="4" class="muted">Aún no hay datos. Pulsa «Listar todos».</td></tr></tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>Historial de peticiones</h2>
+    <table>
+      <thead><tr><th>#</th><th>Petición</th><th>Estado</th><th>Caché</th><th class="num">Tiempo total</th><th class="barcell"></th></tr></thead>
+      <tbody id="historial"><tr><td colspan="6" class="muted">Sin peticiones todavía.</td></tr></tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const historial = [];
+const fmt = (ms) => (ms == null || Number.isNaN(ms)) ? '—' : (ms >= 100 ? ms.toFixed(0) : ms.toFixed(1)) + ' ms';
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const base = () => $('#apiBase').value.trim().replace(/\/$/, '');
+const badge = (c) => `<span class="badge ${c === 'N/A' || !c ? 'NA' : c}">${c || '—'}</span>`;
+
+/** Hace la petición y mide el tiempo total con performance.now(). */
+async function llamar(metodo, ruta) {
+  const t0 = performance.now();
+  try {
+    const resp = await fetch(base() + ruta, { method: metodo });
+    const cuerpo = await resp.json();
+    const cliente = performance.now() - t0;
+    const servidor = parseFloat(resp.headers.get('X-Response-Time-Ms'));   // null si CORS no lo expone
+    const cache = resp.headers.get('X-Cache');
+    registrar({ metodo, ruta, status: resp.status, cliente, servidor, cache });
+    $('#alerta').classList.remove('show');
+    return { ok: resp.ok, cuerpo };
+  } catch (e) {
+    // Un TypeError en fetch = red caída o bloqueo CORS (el navegador no da más detalle por seguridad)
+    registrar({ metodo, ruta, status: 'ERR', cliente: performance.now() - t0, servidor: NaN, cache: 'ERR' });
+    const a = $('#alerta');
+    a.innerHTML = '<b>No se pudo completar la petición.</b> Revisa que el backend esté corriendo en <code>' + esc(base()) +
+      '</code>. Si en la consola del navegador ves «blocked by CORS policy», el origen de esta página ' +
+      '(<code>' + esc(location.origin) + '</code>) no está en <code>app.cors.allowed-origins</code>.';
+    a.classList.add('show');
+    return { ok: false, cuerpo: null };
+  }
+}
+
+function registrar(r) {
+  r.n = historial.length + 1;
+  historial.push(r);
+  $('#ultimoMs').innerHTML = `${fmt(r.cliente).replace(' ms', '')}<small> ms</small>`;
+  $('#ultimoCache').innerHTML = badge(r.cache);
+  $('#ultimoServ').textContent = r.cache == null && Number.isNaN(r.servidor) ? 'no visible (¿CORS expose-headers?)' : fmt(r.servidor);
+  $('#ultimoCli').textContent = fmt(r.cliente);
+  renderHistorial();
+  renderComparacion();
+}
+
+function renderHistorial() {
+  const max = Math.max(...historial.map((h) => h.cliente), 1);
+  $('#historial').innerHTML = historial.slice().reverse().map((h) => `
+    <tr>
+      <td>${h.n}</td>
+      <td><code>${h.metodo} ${esc(h.ruta)}</code></td>
+      <td>${h.status}</td>
+      <td>${badge(h.cache)}</td>
+      <td class="num">${fmt(h.cliente)}</td>
+      <td class="barcell"><div class="bar ${h.cache === 'HIT' ? 'HIT' : h.cache === 'MISS' ? 'MISS' : h.cache === 'ERR' ? 'ERR' : 'NA'}" style="width:${Math.max(1, h.cliente / max * 100)}%"></div></td>
+    </tr>`).join('');
+}
+
+function renderComparacion() {
+  const prom = (tipo) => {
+    const xs = historial.filter((h) => h.cache === tipo && h.status === 200).map((h) => h.cliente);
+    return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+  };
+  const miss = prom('MISS'), hit = prom('HIT');
+  $('#avgMiss').textContent = fmt(miss);
+  $('#avgHit').textContent = fmt(hit);
+  $('#speedup').textContent = (miss && hit) ? `${(miss / hit).toFixed(0)}× más rápido` : '—';
+}
+
+function pintarProductos(lista) {
+  const filas = [].concat(lista);
+  $('#productos').innerHTML = filas.map((p) => `
+    <tr><td>${p.id}</td><td>${esc(p.nombre)}</td><td>${esc(p.categoria)}</td><td class="num">$${p.precio.toFixed(2)}</td></tr>`).join('');
+}
+
+async function conBloqueo(fn) {
+  const botones = document.querySelectorAll('button');
+  botones.forEach((b) => (b.disabled = true));
+  try { await fn(); } finally { botones.forEach((b) => (b.disabled = false)); }
+}
+
+const listar = async () => { const r = await llamar('GET', '/api/productos'); if (r.ok) pintarProductos(r.cuerpo); };
+const buscar = async () => {
+  const r = await llamar('GET', '/api/productos/' + $('#selId').value);
+  if (r.ok) pintarProductos(r.cuerpo);
+  else if (r.cuerpo) $('#productos').innerHTML = `<tr><td colspan="4" class="muted">${esc(r.cuerpo.mensaje || 'Error')}</td></tr>`;
+};
+const limpiar = () => llamar('DELETE', '/api/cache');
+
+$('#btnListar').onclick = () => conBloqueo(listar);
+$('#btnBuscar').onclick = () => conBloqueo(buscar);
+$('#btnLimpiar').onclick = () => conBloqueo(limpiar);
+$('#btnDemo').onclick = () => conBloqueo(async () => {
+  await limpiar();
+  for (let i = 0; i < 3; i++) await listar();            // MISS, HIT, HIT
+  const sel = $('#selId'); sel.value = '1';
+  for (let i = 0; i < 2; i++) await buscar();             // MISS, HIT
+});
+</script>
+</body>
+</html>
